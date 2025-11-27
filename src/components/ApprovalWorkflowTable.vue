@@ -13,14 +13,21 @@
         <div class="requests-panel">
           <div class="panel-header">
             <h2><i class="fas fa-list"></i>Requests</h2>
-            <div class="filter-tabs">
-              <div 
-                v-for="filter in filters" 
-                :key="filter.value"
-                @click="currentFilter = filter.value; currentPage = 1"
-                :class="['filter-tab', { active: currentFilter === filter.value }]"
-              >
-                {{ filter.label }}
+            <div style="display:flex; align-items:center; gap:12px; width:100%">
+              <div class="filter-tabs">
+                <div 
+                  v-for="filter in filters" 
+                  :key="filter.value"
+                  @click="currentFilter = filter.value; currentPage = 1"
+                  :class="['filter-tab', { active: currentFilter === filter.value }]"
+                >
+                  {{ filter.label }}
+                </div>
+              </div>
+              <div style="margin-left:auto">
+                <button v-if="currentUser && canonicalRole(currentUser.role) === 'superadmin'" class="btn-archive" @click="toggleArchiveMode">
+                  {{ archiveMode ? 'Show Active' : 'Show Archive' }}
+                </button>
               </div>
             </div>
           </div>
@@ -224,6 +231,9 @@ export default {
       API_BASE: 'http://localhost:5501/api',
       loading: true,
       currentFilter: 'all',
+        archiveMode: false,
+        archiveStorageKey: 'approval_local_archive',
+        localArchive: [],
       currentRequestId: null,
       currentPage: 1,
       itemsPerPage: 10,
@@ -244,15 +254,20 @@ export default {
   },
   computed: {
     filteredRequests() {
-      let requests = this.allRequests
+      // If in archiveMode, show localArchive (approved/rejected snapshots)
+      if (this.archiveMode) {
+        let archive = this.localArchive || []
+        if (this.currentFilter === 'pending') return archive.filter(r => r.status === 'Pending')
+        if (this.currentFilter === 'in-progress') return archive.filter(r => r.status === 'In Progress')
+        return archive
+      }
 
-      // All roles see all requests
-      
-      // Apply status filters
+      let requests = this.allRequests || []
+      // Apply status filters for active list
       if (this.currentFilter === 'pending') {
-        return requests.filter(r => r.status === 'Pending')
+        return requests.filter(r => (r.status || '').toString() === 'Pending')
       } else if (this.currentFilter === 'in-progress') {
-        return requests.filter(r => r.status === 'In Progress')
+        return requests.filter(r => (r.status || '').toString() === 'In Progress')
       }
       return requests
     },
@@ -269,6 +284,15 @@ export default {
     async loadRequests() {
       try {
         this.loading = true
+        // If showing archive, load from local archive cache (superadmin only)
+        if (this.archiveMode) {
+          this.localArchive = this.loadLocalArchive() || []
+          if ((!this.localArchive || this.localArchive.length === 0) && this.currentUser && this.canonicalRole(this.currentUser.role) === 'superadmin') {
+            this.showNotification('No archived items available locally', 'info')
+          }
+          return
+        }
+
         const response = await fetch(`${this.API_BASE}/approvals/pending-access-requests`)
         if (response.ok) {
           this.allRequests = await response.json()
@@ -371,11 +395,47 @@ export default {
               console.error('Error applying local bounce-back update:', e)
             }
 
-            // reload list so request summaries reflect new progress, but avoid re-fetching details which we updated locally
-            await this.loadRequests()
+            // update request-level status locally to reflect rejection so it does not disappear
+            if (this.selectedRequest.request) this.selectedRequest.request.status = 'Rejected'
+            try {
+              const brief = {
+                id: this.selectedRequest.request.id,
+                request_type: this.selectedRequest.request.request_type,
+                requester_name: this.selectedRequest.request.requester_name,
+                status: 'Rejected',
+                current_stage: this.selectedRequest.request.current_stage,
+                approved_count: this.selectedRequest.request.approved_count,
+                total_approvals: this.selectedRequest.request.total_approvals,
+                workflow: this.selectedRequest.workflow
+              }
+              const idx = this.allRequests.findIndex(r => r.id === brief.id)
+              if (idx !== -1) this.allRequests[idx] = Object.assign({}, this.allRequests[idx], brief)
+              else this.allRequests.unshift(brief)
+              // persist to local archive so superadmin can view it
+              if (this.saveToLocalArchive) this.saveToLocalArchive(brief)
+            } catch (e) {
+              console.error('Error syncing rejected request into list:', e)
+            }
+            // do NOT reload the pending list here, otherwise the rejected item disappears
           } else {
             // For approvals (non-reject), re-fetch details from server to get authoritative state
             await this.selectRequest(this.currentRequestId)
+            // persist approved snapshot to local archive so superadmin can view it
+            try {
+              if (this.selectedRequest && this.selectedRequest.request) {
+                const brief = {
+                  id: this.selectedRequest.request.id,
+                  request_type: this.selectedRequest.request.request_type,
+                  requester_name: this.selectedRequest.request.requester_name,
+                  status: this.selectedRequest.request.status || 'Approved',
+                  current_stage: this.selectedRequest.request.current_stage,
+                  approved_count: this.selectedRequest.request.approved_count,
+                  total_approvals: this.selectedRequest.request.total_approvals,
+                  workflow: this.selectedRequest.workflow
+                }
+                if (this.saveToLocalArchive) this.saveToLocalArchive(brief)
+              }
+            } catch (e) { console.error('Error saving approved snapshot:', e) }
             await this.loadRequests()
           }
         } else {
@@ -403,6 +463,33 @@ export default {
         return
       }
       await this.updateApproval(pendingIndex, 'Approved')
+    },
+    // Local archive helpers (persist snapshots of approved/rejected requests)
+    loadLocalArchive() {
+      try {
+        const raw = localStorage.getItem(this.archiveStorageKey)
+        if (!raw) return []
+        return JSON.parse(raw)
+      } catch (e) {
+        console.error('Failed to load local archive', e)
+        return []
+      }
+    },
+    saveToLocalArchive(item) {
+      try {
+        const raw = localStorage.getItem(this.archiveStorageKey)
+        let arr = raw ? JSON.parse(raw) : []
+        const idx = arr.findIndex(a => a.id === item.id)
+        if (idx !== -1) arr[idx] = Object.assign({}, arr[idx], item)
+        else arr.unshift(item)
+        // cap archive size
+        arr = arr.slice(0, 500)
+        localStorage.setItem(this.archiveStorageKey, JSON.stringify(arr))
+        // also update in-memory localArchive
+        this.localArchive = arr
+      } catch (e) {
+        console.error('Failed to save to local archive', e)
+      }
     },
     showNotification(message, type = 'success') {
       this.notification = { visible: true, message, type }
@@ -714,6 +801,17 @@ export default {
   background: #f8d7da;
   color: #721c24;
 }
+
+.btn-archive {
+  background: transparent;
+  color: white;
+  border: 1px solid rgba(255,255,255,0.12);
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.btn-archive:hover { opacity: 0.95 }
 
 .request-stage {
   color: #666;
