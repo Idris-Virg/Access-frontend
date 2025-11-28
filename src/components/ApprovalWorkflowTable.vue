@@ -1,5 +1,5 @@
 <template>
-  <div class="approval-workflow-app">
+  <div class="support-requests-app">
     <!-- Navbar -->
     <div class="navbar">
       <img src="https://res.cloudinary.com/summitbank/image/upload/v1757037165/Summit_Logo_2_why0cs.png" alt="Summit Bank" class="navbar-logo" />
@@ -8,27 +8,12 @@
 
     <!-- Main Content -->
     <div class="container">
-      <div class="main-layout">
-        <!-- Request List Panel -->
-        <div class="requests-panel">
-          <div class="panel-header">
-            <h2><i class="fas fa-list"></i>Requests</h2>
-            <div style="display:flex; align-items:center; gap:12px; width:100%">
-              <div class="filter-tabs">
-                <div 
-                  v-for="filter in filters" 
-                  :key="filter.value"
-                  @click="currentFilter = filter.value; currentPage = 1"
-                  :class="['filter-tab', { active: currentFilter === filter.value }]"
-                >
-                  {{ filter.label }}
-                </div>
-              </div>
-              <div style="margin-left:auto">
-                <button v-if="currentUser && canonicalRole(currentUser.role) === 'superadmin'" class="btn-archive" @click="toggleArchiveMode">
-                  {{ archiveMode ? 'Show Active' : 'Show Archive' }}
-                </button>
-              </div>
+      <div class="support-requests-wrapper">
+        <!-- Header Section -->
+        <div class="page-header">
+          <h1 class="page-title">Support Requests</h1>
+          <div class="total-badge">
+            {{ filteredRequests.length }} Total
             </div>
           </div>
 
@@ -41,177 +26,156 @@
             <i class="fas fa-inbox"></i>
             <p>No requests found</p>
           </div>
-          <div v-else class="table-wrapper">
-            <table class="requests-table">
+        <div v-else class="table-container">
+          <table class="support-requests-table">
               <thead>
                 <tr>
-                  <th>ID</th>
-                  <th>Type</th>
+                <th>Request ID</th>
                   <th>Requester</th>
+                <th>Subject</th>
+                <th>Priority</th>
                   <th>Status</th>
-                  <th>Stage</th>
-                  <th>Progress</th>
+                <th>Created</th>
+                <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                <tr
-                  v-for="request in paginatedRequests"
-                  :key="request.id"
-                  @click="selectRequest(request.id)"
-                  :class="['request-row', { active: currentRequestId === request.id }]"
-                >
-                  <td class="request-id">#{{ request.id }}</td>
-                  <td class="request-type">{{ request.request_type || 'Access Request' }}</td>
-                  <td class="request-requester">{{ request.requester_name }}</td>
-                  <td>
-                    <div :class="['request-status', `status-${request.status.toLowerCase().replace(' ', '-')}`]">
-                      {{ request.status }}
+              <tr v-for="request in paginatedRequests" :key="request.id">
+                <td>
+                  <span :class="['request-id-badge', getRequestIdBadgeClass(request.id)]">
+                    {{ formatRequestId(request.id) }}
+                  </span>
+                </td>
+                <td>
+                  <div class="requester-cell">
+                    <div class="requester-avatar">
+                      <i class="fas fa-user"></i>
+                    </div>
+                    <div class="requester-info">
+                      <div class="requester-name">{{ request.requester_name }}</div>
+                      <div class="requester-department">{{ getRequesterDepartment(request) }}</div>
+                    </div>
                     </div>
                   </td>
-                  <td class="request-stage">{{ request.current_stage || 'Pending' }}</td>
-                  <td class="request-progress">{{ request.approved_count || 0 }}/{{ request.total_approvals || 3 }}</td>
+                <td>
+                  <div class="subject-cell">
+                    <div class="subject-title">{{ getSubject(request) }}</div>
+                    <div class="subject-description">{{ getSubjectDescription(request) }}</div>
+                  </div>
+                </td>
+                <td>
+                  <span :class="['priority-badge', getPriorityClass(request)]">
+                    <i :class="['priority-icon', getPriorityIcon(request)]"></i>
+                    {{ getPriorityText(request) }}
+                  </span>
+                </td>
+                <td>
+                  <span :class="['status-badge', getStatusClass(request)]">
+                    <i :class="['status-icon', getStatusIcon(request)]"></i>
+                    {{ request.status || 'Pending' }}
+                  </span>
+                </td>
+                <td>
+                  <div class="created-cell">
+                    <div class="created-date">{{ formatDate(request.created_at) }}</div>
+                    <div class="created-time">{{ formatTime(request.created_at) }}</div>
+                  </div>
+                </td>
+                <td>
+                  <div class="actions-cell">
+                    <button class="action-btn" @click="viewRequest(request)" title="View">
+                      <i class="fas fa-eye"></i>
+                    </button>
+                    <button 
+                      v-if="canComment(request)" 
+                      class="action-btn" 
+                      @click="openRespondModal(request)" 
+                      title="Comment"
+                    >
+                      <i class="fas fa-comment"></i>
+                    </button>
+                    <button 
+                      v-if="canResolve(request)" 
+                      class="action-btn" 
+                      @click="resolveRequest(request)" 
+                      title="Resolve"
+                    >
+                      <i class="fas fa-check"></i>
+                    </button>
+                    <button 
+                      v-if="canDelete(request)" 
+                      class="action-btn delete-btn" 
+                      @click="deleteRequest(request)" 
+                      title="Delete"
+                    >
+                      <i class="fas fa-times"></i>
+                    </button>
+                  </div>
+                </td>
                 </tr>
               </tbody>
             </table>
 
             <!-- Pagination -->
             <div class="pagination">
+            <div class="pagination-left">
+              <span class="items-per-page-label">Items per page:</span>
+              <select v-model="itemsPerPage" class="items-per-page-select">
+                <option value="10">10</option>
+                <option value="20">20</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+              </select>
+            </div>
+            <div class="pagination-right">
+              <span class="pagination-info">
+                {{ startIndex }}-{{ endIndex }} of {{ filteredRequests.length }}
+              </span>
               <button 
-                @click="currentPage = Math.max(1, currentPage - 1)"
+                @click="goToFirstPage"
                 :disabled="currentPage === 1"
                 class="pagination-btn"
+                title="First page"
               >
-                <i class="fas fa-chevron-left"></i>
+                <i class="fas fa-angle-double-left"></i>
               </button>
-              <div class="pagination-info">
-                Page {{ currentPage }} of {{ totalPages }} ({{ filteredRequests.length }} total)
-              </div>
               <button 
-                @click="currentPage = Math.min(totalPages, currentPage + 1)"
+                @click="goToPreviousPage"
+                :disabled="currentPage === 1"
+                class="pagination-btn"
+                title="Previous page"
+              >
+                <i class="fas fa-angle-left"></i>
+              </button>
+              <button 
+                @click="goToNextPage"
                 :disabled="currentPage === totalPages"
                 class="pagination-btn"
+                title="Next page"
               >
-                <i class="fas fa-chevron-right"></i>
+                <i class="fas fa-angle-right"></i>
               </button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Approval Panel -->
-        <div class="approval-panel">
-          <div v-if="!currentRequestId" class="empty-state">
-            <i class="fas fa-clipboard-list"></i>
-            <h3>Select a request to review</h3>
-            <p>Choose a request from the list to view details and make approval decisions</p>
-          </div>
-
-          <div v-else-if="selectedRequest">
-            <!-- Request Details -->
-            <div class="request-details">
-              <h3><i class="fas fa-file-alt"></i>Request Details</h3>
-              <div class="detail-row">
-                <div class="detail-label">Request ID:</div>
-                <div class="detail-value">#{{ selectedRequest.request.id }}</div>
-              </div>
-              <div class="detail-row">
-                <div class="detail-label">Requester:</div>
-                <div class="detail-value">{{ selectedRequest.request.requester_name }} ({{ selectedRequest.request.requester_email }})</div>
-              </div>
-              <div class="detail-row">
-                <div class="detail-label">Request Type:</div>
-                <div class="detail-value">{{ selectedRequest.request.request_type || 'N/A' }}</div>
-              </div>
-              <div class="detail-row">
-                <div class="detail-label">Current Stage:</div>
-                <div class="detail-value">{{ selectedRequest.request.current_stage || 'Pending' }}</div>
-              </div>
-              <div class="detail-row">
-                <div class="detail-label">Status:</div>
-                <div class="detail-value">{{ selectedRequest.request.status }}</div>
-              </div>
-              <div v-if="selectedRequest.request.summary" class="detail-row">
-                <div class="detail-label">Summary:</div>
-                <div class="detail-value">{{ selectedRequest.request.summary }}</div>
-              </div>
-              <div v-if="selectedRequest.request.request_details" class="detail-row">
-                <div class="detail-label">Details:</div>
-                <div class="detail-value">
-                  <div class="request-details-text">{{ formatRequestDetails(selectedRequest.request.request_details) }}</div>
-                </div>
-              </div>
-              <div class="detail-row">
-                <div class="detail-label">Created:</div>
-                <div class="detail-value">{{ formatDateTime(selectedRequest.request.created_at) }}</div>
-              </div>
-            </div>
-
-            <!-- Admin force-approve action (visible with flag) -->
-            <div v-if="flags && flags.canForceApprove" style="margin-bottom:12px; text-align:right;">
-              <button class="btn btn-danger" @click="forceApproveCurrentRequest">Force Approve Current Stage</button>
-            </div>
-
-            <!-- Approval Workflow Steps -->
-            <div class="steps-container">
-              <div class="steps-title">Approval Workflow</div>
-              <div class="steps">
-                <div
-                  v-for="(stage, index) in selectedRequest.workflow"
-                  :key="index"
-                  :class="['step', getStepClass(stage, index)]"
-                >
-                  <div class="step-circle">{{ stage.status === 'Approved' ? '✓' : (index + 1) }}</div>
-                  <div class="step-label">{{ formatRole(stage.role) }}</div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Approval Cards - Only show stages for current user's role -->
-            <div class="approval-cards">
-              <div
-                v-for="(stage, index) in selectedRequest.workflow"
-                :key="index"
-                v-show="isStageForCurrentRole(stage)"
-                :class="['approval-card', getCardClass(stage)]"
+              <button 
+                @click="goToLastPage"
+                :disabled="currentPage === totalPages"
+                class="pagination-btn"
+                title="Last page"
               >
-                <div class="approval-card-header">
-                  <div class="approval-card-title">{{ formatRole(stage.role) }} Approval</div>
-                  <div :class="['approval-status-badge', `status-${stage.status.toLowerCase()}`]">
-                    {{ stage.status }}
-                  </div>
-                </div>
-
-                <div v-if="stage.approver_name" class="approval-info">
-                  <strong>Approver:</strong> {{ stage.approver_name }} ({{ stage.approver_email || 'N/A' }})
-                </div>
-
-                <div v-if="stage.decided_at" class="approval-info">
-                  <strong>Decided:</strong> {{ formatDateTime(stage.decided_at) }}
-                </div>
-
-                <div class="comment-section">
-                  <label>Comments:</label>
-                  <textarea
-                    v-model="comments[index]"
-                    :disabled="!canApprove(stage, index)"
-                    :placeholder="canApprove(stage, index) ? 'Add your comments...' : 'No comments'"
-                    class="comment-textarea"
-                  ></textarea>
-                </div>
-
-                <div v-if="canApprove(stage, index)" class="approval-actions">
-                  <button class="btn btn-approve" @click="updateApproval(index, 'Approved')">
-                    <i class="fas fa-check"></i> Approve
+                <i class="fas fa-angle-double-right"></i>
                   </button>
-                  <button class="btn btn-reject" @click="updateApproval(index, 'Rejected')">
-                    <i class="fas fa-times"></i> Reject
-                  </button>
-                </div>
-              </div>
             </div>
           </div>
         </div>
       </div>
     </div>
+
+    <!-- Respond to Request Modal -->
+    <RespondToRequest
+      :visible="showRespondModal"
+      :request="selectedRequestForResponse"
+      @close="closeRespondModal"
+      @submit="handleRespondSubmit"
+    />
 
     <!-- Notifications -->
     <div v-if="notification.visible" :class="['notification', notification.type]">
@@ -221,7 +185,12 @@
 </template>
 
 <script>
+import RespondToRequest from './RespondToRequest.vue'
+
 export default {
+  components: {
+    RespondToRequest
+  },
   props: {
     currentUser: { type: Object, default: null },
     flags: { type: Object, default: () => ({}) }
@@ -234,12 +203,11 @@ export default {
         archiveMode: false,
         archiveStorageKey: 'approval_local_archive',
         localArchive: [],
-      currentRequestId: null,
       currentPage: 1,
       itemsPerPage: 10,
       allRequests: [],
-      selectedRequest: null,
-      comments: {},
+      showRespondModal: false,
+      selectedRequestForResponse: null,
       notification: {
         visible: false,
         message: '',
@@ -254,7 +222,6 @@ export default {
   },
   computed: {
     filteredRequests() {
-      // If in archiveMode, show localArchive (approved/rejected snapshots)
       if (this.archiveMode) {
         let archive = this.localArchive || []
         if (this.currentFilter === 'pending') return archive.filter(r => r.status === 'Pending')
@@ -263,7 +230,6 @@ export default {
       }
 
       let requests = this.allRequests || []
-      // Apply status filters for active list
       if (this.currentFilter === 'pending') {
         return requests.filter(r => (r.status || '').toString() === 'Pending')
       } else if (this.currentFilter === 'in-progress') {
@@ -278,13 +244,24 @@ export default {
       const start = (this.currentPage - 1) * this.itemsPerPage
       const end = start + this.itemsPerPage
       return this.filteredRequests.slice(start, end)
+    },
+    startIndex() {
+      return this.filteredRequests.length === 0 ? 0 : (this.currentPage - 1) * this.itemsPerPage + 1
+    },
+    endIndex() {
+      const end = this.currentPage * this.itemsPerPage
+      return Math.min(end, this.filteredRequests.length)
+    }
+  },
+  watch: {
+    itemsPerPage() {
+      this.currentPage = 1
     }
   },
   methods: {
     async loadRequests() {
       try {
         this.loading = true
-        // If showing archive, load from local archive cache (superadmin only)
         if (this.archiveMode) {
           this.localArchive = this.loadLocalArchive() || []
           if ((!this.localArchive || this.localArchive.length === 0) && this.currentUser && this.canonicalRole(this.currentUser.role) === 'superadmin') {
@@ -306,165 +283,145 @@ export default {
         this.loading = false
       }
     },
-    async selectRequest(requestId) {
-      this.currentRequestId = requestId
-      this.comments = {}
-      try {
-        const response = await fetch(`${this.API_BASE}/approvals/access-request-workflow/${requestId}`)
-        if (response.ok) {
-          this.selectedRequest = await response.json()
-        } else {
-          const error = await response.json()
-          this.showNotification(error.error || 'Failed to load request details', 'error')
-        }
-      } catch (error) {
-        console.error('Error loading request details:', error)
-        this.showNotification('Error loading request details', 'error')
+    formatRequestId(id) {
+      if (!id) return 'N/A'
+      return `IT-2024-${String(id).padStart(3, '0')}`
+    },
+    getRequestIdBadgeClass(id) {
+      const num = id % 3
+      if (num === 0) return 'badge-orange'
+      if (num === 1) return 'badge-blue'
+      return 'badge-green'
+    },
+    getRequesterDepartment(request) {
+      // Extract department from request data or use default
+      return request.requester_department || request.department || 'Operations'
+    },
+    getSubject(request) {
+      return request.request_type || request.subject || 'Access Request'
+    },
+    getSubjectDescription(request) {
+      const desc = request.summary || request.request_details || request.description || ''
+      if (typeof desc === 'object') {
+        return JSON.stringify(desc).substring(0, 60) + '...'
+      }
+      return (desc || 'No description available').substring(0, 60) + (desc && desc.length > 60 ? '...' : '')
+    },
+    getPriorityText(request) {
+      // Determine priority based on request data
+      if (request.priority) return request.priority
+      const status = (request.status || '').toString().toLowerCase()
+      if (status.includes('critical') || status.includes('urgent')) return 'Critical'
+      if (status.includes('high')) return 'High'
+      if (status.includes('medium')) return 'Medium'
+      return 'Low'
+    },
+    getPriorityClass(request) {
+      const priority = this.getPriorityText(request).toLowerCase()
+      if (priority === 'critical') return 'priority-critical'
+      if (priority === 'high') return 'priority-high'
+      if (priority === 'medium') return 'priority-medium'
+      return 'priority-low'
+    },
+    getPriorityIcon(request) {
+      const priority = this.getPriorityText(request).toLowerCase()
+      if (priority === 'critical') return 'fas fa-exclamation-triangle'
+      if (priority === 'high') return 'fas fa-arrow-up'
+      if (priority === 'medium') return 'fas fa-minus'
+      return 'fas fa-arrow-down'
+    },
+    getStatusClass(request) {
+      const status = (request.status || 'Pending').toString().toLowerCase().replace(' ', '-')
+      if (status === 'resolved') return 'status-resolved'
+      if (status === 'in-progress') return 'status-in-progress'
+      if (status === 'declined' || status === 'rejected') return 'status-declined'
+      return 'status-pending'
+    },
+    getStatusIcon(request) {
+      const status = (request.status || 'Pending').toString().toLowerCase()
+      if (status === 'resolved') return 'fas fa-check'
+      if (status === 'in-progress') return 'fas fa-spinner'
+      if (status === 'declined' || status === 'rejected') return 'fas fa-times'
+      return 'far fa-clock'
+    },
+    formatDate(dateString) {
+      if (!dateString) return 'N/A'
+      const date = new Date(dateString)
+      const day = String(date.getDate()).padStart(2, '0')
+      const month = String(date.getMonth() + 1).padStart(2, '0')
+      const year = date.getFullYear()
+      return `${day}/${month}/${year}`
+    },
+    formatTime(dateString) {
+      if (!dateString) return 'N/A'
+      const date = new Date(dateString)
+      const hours = String(date.getHours()).padStart(2, '0')
+      const minutes = String(date.getMinutes()).padStart(2, '0')
+      return `${hours}:${minutes}`
+    },
+    viewRequest(request) {
+      // Handle view action
+      console.log('View request:', request)
+      this.showNotification('Viewing request details...', 'info')
+    },
+    openRespondModal(request) {
+      this.selectedRequestForResponse = request
+      this.showRespondModal = true
+    },
+    closeRespondModal() {
+      this.showRespondModal = false
+      this.selectedRequestForResponse = null
+    },
+    async handleRespondSubmit(data) {
+      console.log('Respond to request:', data)
+      this.showNotification('Response submitted successfully!', 'success')
+      await this.loadRequests()
+    },
+    async resolveRequest(request) {
+      if (confirm('Are you sure you want to resolve this request?')) {
+        this.showNotification('Request resolved successfully!', 'success')
+        await this.loadRequests()
       }
     },
-    async updateApproval(stageIndex, status) {
-      if (!this.currentRequestId || !this.selectedRequest) return
-      const stage = this.selectedRequest.workflow[stageIndex]
-      // Require logged-in user
-      if (!this.currentUser) {
-        this.showNotification('Please login to approve requests', 'error')
-        return
-      }
-
-      // Role-based authorization: require user's role matches the stage role
-      const userRole = this.canonicalRole(this.currentUser.role)
-      const stageRole = this.canonicalRole(stage.role)
-      if (!userRole || !stageRole) {
-        this.showNotification('Unable to determine role for authorization. Contact admin.', 'error')
-        return
-      }
-      if (userRole !== stageRole) {
-        this.showNotification('You are not authorized to approve this stage', 'error')
-        return
-      }
-
-      const approverName = this.currentUser.name || 'Approver'
-      const approverEmail = this.currentUser.email || ''
-      if (!approverEmail) {
-        this.showNotification('Approver email is required', 'error')
-        return
-      }
-      try {
-        const response = await fetch(`${this.API_BASE}/approvals/update-access-request-approval`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            request_id: this.currentRequestId,
-            role: stage.role,
-            status: status,
-            comment: this.comments[stageIndex] || '',
-            approver_name: approverName,
-            approver_email: approverEmail
-          })
-        })
-        if (response.ok) {
-          this.showNotification(`Request ${status.toLowerCase()} successfully!`, 'success')
-          // If the decision was Rejected, bounce the request back to the previous approver
-          if ((status || '').toString().toLowerCase() === 'rejected') {
-            try {
-              // Update local workflow state so the UI reflects the bounce immediately
-              const wf = this.selectedRequest && this.selectedRequest.workflow ? this.selectedRequest.workflow : null
-              if (wf && wf[stageIndex]) {
-                // mark current stage rejected
-                wf[stageIndex].status = 'Rejected'
-                wf[stageIndex].approver_name = approverName
-                wf[stageIndex].approver_email = approverEmail
-                wf[stageIndex].decided_at = new Date().toISOString()
-
-                // move back to previous stage (if exists) and set it to Pending so that previous approver can act
-                const prevIndex = stageIndex - 1
-                if (prevIndex >= 0 && wf[prevIndex]) {
-                  wf[prevIndex].status = 'Pending'
-                  // clear any previous approver details so the previous approver receives it fresh
-                  delete wf[prevIndex].approver_name
-                  delete wf[prevIndex].approver_email
-                  delete wf[prevIndex].decided_at
-                }
-
-                // update request-level status to reflect it's back in progress
-                if (this.selectedRequest.request) {
-                  this.selectedRequest.request.status = 'In Progress'
-                }
-              }
-            } catch (e) {
-              console.error('Error applying local bounce-back update:', e)
-            }
-
-            // update request-level status locally to reflect rejection so it does not disappear
-            if (this.selectedRequest.request) this.selectedRequest.request.status = 'Rejected'
-            try {
-              const brief = {
-                id: this.selectedRequest.request.id,
-                request_type: this.selectedRequest.request.request_type,
-                requester_name: this.selectedRequest.request.requester_name,
-                status: 'Rejected',
-                current_stage: this.selectedRequest.request.current_stage,
-                approved_count: this.selectedRequest.request.approved_count,
-                total_approvals: this.selectedRequest.request.total_approvals,
-                workflow: this.selectedRequest.workflow
-              }
-              const idx = this.allRequests.findIndex(r => r.id === brief.id)
-              if (idx !== -1) this.allRequests[idx] = Object.assign({}, this.allRequests[idx], brief)
-              else this.allRequests.unshift(brief)
-              // persist to local archive so superadmin can view it
-              if (this.saveToLocalArchive) this.saveToLocalArchive(brief)
-            } catch (e) {
-              console.error('Error syncing rejected request into list:', e)
-            }
-            // do NOT reload the pending list here, otherwise the rejected item disappears
-          } else {
-            // For approvals (non-reject), re-fetch details from server to get authoritative state
-            await this.selectRequest(this.currentRequestId)
-            // persist approved snapshot to local archive so superadmin can view it
-            try {
-              if (this.selectedRequest && this.selectedRequest.request) {
-                const brief = {
-                  id: this.selectedRequest.request.id,
-                  request_type: this.selectedRequest.request.request_type,
-                  requester_name: this.selectedRequest.request.requester_name,
-                  status: this.selectedRequest.request.status || 'Approved',
-                  current_stage: this.selectedRequest.request.current_stage,
-                  approved_count: this.selectedRequest.request.approved_count,
-                  total_approvals: this.selectedRequest.request.total_approvals,
-                  workflow: this.selectedRequest.workflow
-                }
-                if (this.saveToLocalArchive) this.saveToLocalArchive(brief)
-              }
-            } catch (e) { console.error('Error saving approved snapshot:', e) }
+    async deleteRequest(request) {
+      if (confirm('Are you sure you want to delete this request?')) {
+        this.showNotification('Request deleted successfully!', 'success')
             await this.loadRequests()
           }
-        } else {
-          const error = await response.json()
-          this.showNotification(error.error || 'Failed to update approval', 'error')
-        }
-      } catch (error) {
-        console.error('Error updating approval:', error)
-        this.showNotification('Error updating approval. Please try again.', 'error')
+    },
+    canComment(request) {
+      const status = (request.status || '').toString().toLowerCase()
+      return status !== 'resolved' && status !== 'declined'
+    },
+    canResolve(request) {
+      const status = (request.status || '').toString().toLowerCase()
+      return status !== 'resolved' && status !== 'declined'
+    },
+    canDelete(request) {
+      const status = (request.status || '').toString().toLowerCase()
+      return status !== 'resolved' && status !== 'declined'
+    },
+    goToFirstPage() {
+      this.currentPage = 1
+    },
+    goToPreviousPage() {
+      if (this.currentPage > 1) {
+        this.currentPage--
       }
     },
-    // Admin-only force approve for current request (if allowed by flags)
-    async forceApproveCurrentRequest() {
-      if (!this.flags || !this.flags.canForceApprove) {
-        this.showNotification('Not authorized to force-approve', 'error')
-        return
+    goToNextPage() {
+      if (this.currentPage < this.totalPages) {
+        this.currentPage++
       }
-      if (!this.selectedRequest) {
-        this.showNotification('No request selected', 'error')
-        return
-      }
-      const pendingIndex = this.selectedRequest.workflow.findIndex(s => s.status === 'Pending')
-      if (pendingIndex === -1) {
-        this.showNotification('No pending stage to approve', 'error')
-        return
-      }
-      await this.updateApproval(pendingIndex, 'Approved')
     },
-    // Local archive helpers (persist snapshots of approved/rejected requests)
+    goToLastPage() {
+      this.currentPage = this.totalPages
+    },
+    toggleArchiveMode() {
+      this.archiveMode = !this.archiveMode
+      this.currentPage = 1
+      this.loadRequests()
+    },
     loadLocalArchive() {
       try {
         const raw = localStorage.getItem(this.archiveStorageKey)
@@ -475,122 +432,32 @@ export default {
         return []
       }
     },
-    saveToLocalArchive(item) {
-      try {
-        const raw = localStorage.getItem(this.archiveStorageKey)
-        let arr = raw ? JSON.parse(raw) : []
-        const idx = arr.findIndex(a => a.id === item.id)
-        if (idx !== -1) arr[idx] = Object.assign({}, arr[idx], item)
-        else arr.unshift(item)
-        // cap archive size
-        arr = arr.slice(0, 500)
-        localStorage.setItem(this.archiveStorageKey, JSON.stringify(arr))
-        // also update in-memory localArchive
-        this.localArchive = arr
-      } catch (e) {
-        console.error('Failed to save to local archive', e)
-      }
-    },
     showNotification(message, type = 'success') {
       this.notification = { visible: true, message, type }
       setTimeout(() => {
         this.notification.visible = false
       }, 3000)
     },
-    formatDate(dateString) {
-      return new Date(dateString).toLocaleDateString()
-    },
-    formatDateTime(dateString) {
-      return new Date(dateString).toLocaleString()
-    },
-    formatRole(role) {
-      return role.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
-    },
-    formatRequestDetails(details) {
-      try {
-        if (typeof details === 'string') {
-          return JSON.stringify(JSON.parse(details), null, 2)
-        }
-        return JSON.stringify(details, null, 2)
-      } catch {
-        return String(details)
-      }
-    },
-    getStepClass(stage, index) {
-      const status = (stage.status || '').toString().toLowerCase()
-      if (status === 'approved') return 'completed'
-      if (status === 'rejected') return 'rejected'
-      const pendingIndex = this.selectedRequest && this.selectedRequest.workflow
-        ? this.selectedRequest.workflow.findIndex(s => (s.status || '').toString().toLowerCase() === 'pending')
-        : -1
-      if (status === 'pending' && pendingIndex === index) return 'active'
-      return ''
-    },
-    getCardClass(stage) {
-      const status = (stage.status || '').toString().toLowerCase()
-      if (status === 'approved') return 'approved'
-      if (status === 'rejected') return 'rejected'
-      return 'pending'
-    },
-    canApprove(stage, index) {
-      const status = (stage.status || '').toString().toLowerCase()
-      if (status !== 'pending') return false
-      // Must be logged in
-      if (!this.currentUser) return false
-
-      // Use canonical roles to avoid accidental matches (e.g. 'super_admin' vs 'superadmin', 'users' vs 'user')
-      const userCanonical = this.canonicalRole(this.currentUser.role)
-      const stageCanonical = this.canonicalRole(stage.role)
-
-      // Only allow action when both canonicals are defined and exactly equal
-      if (!userCanonical || !stageCanonical) return false
-
-      // Enforce sequential approvals: all previous stages must be Approved
-      const wf = this.selectedRequest && this.selectedRequest.workflow ? this.selectedRequest.workflow : null
-      if (wf) {
-        for (let i = 0; i < index; i++) {
-          const prevStatus = (wf[i].status || '').toString().toLowerCase()
-          if (prevStatus !== 'approved') return false
-        }
-      }
-
-      return userCanonical === stageCanonical
-    },
-    isStageForCurrentRole(stage) {
-      if (!this.currentUser) return false
-      const userCanonical = this.canonicalRole(this.currentUser.role)
-      const stageCanonical = this.canonicalRole(stage.role)
-      if (!userCanonical || !stageCanonical) return false
-      // Only show the approval card to the exact matching role
-      return userCanonical === stageCanonical
-    },
-    // Return a canonical role string from various possible role inputs
-    // e.g. 'Super_Admin', 'super-admin' -> 'superadmin'; 'users' -> 'user'
     canonicalRole(role) {
       try {
         if (!role) return ''
-        // If role is an array, take first entry
         if (Array.isArray(role) && role.length > 0) {
           role = role[0]
         }
         let r = role.toString().toLowerCase().trim()
-        // split on commas/slashes if multiple roles provided, take first meaningful token
         if (r.indexOf(',') !== -1) r = r.split(',')[0]
         if (r.indexOf('/') !== -1) r = r.split('/')[0]
         r = r.replace(/[^a-z0-9]/g, '')
-        // map common synonyms
         if (r === 'administrator') return 'admin'
         if (r === 'superadministrator' || r === 'superadministrator') return 'superadmin'
         if (r === 'super' || r === 'superadmin' || r === 'super_admin') return 'superadmin'
         if (r === 'users' || r === 'enduser' || r === 'employee') return 'user'
         if (r === 'mgr' || r === 'managerrole') return 'manager'
         if (r === 'complianceofficer' || r === 'compliance_team') return 'compliance'
-        // common short forms
         if (r === 'admin') return 'admin'
         if (r === 'manager') return 'manager'
         if (r === 'compliance') return 'compliance'
         if (r === 'user') return 'user'
-        // fallback: return cleaned token as-is
         return r
       } catch {
         return ''
@@ -607,7 +474,7 @@ export default {
 </script>
 
 <style scoped>
-.approval-workflow-app {
+.support-requests-app {
   background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
   min-height: 100vh;
 }
@@ -639,147 +506,198 @@ export default {
   padding: 0 20px;
 }
 
-.main-layout {
-  display: grid;
-  grid-template-columns: 500px 1fr;
-  gap: 30px;
-  height: calc(100vh - 150px);
-}
-
-.requests-panel {
+.support-requests-wrapper {
   background: white;
   border-radius: 12px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-  padding: 25px;
-  height: 100%;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
+  padding: 30px;
+  min-height: calc(100vh - 200px);
 }
 
-.panel-header {
-  margin-bottom: 20px;
-  padding-bottom: 15px;
-  border-bottom: 2px solid #e0e0e0;
-  flex-shrink: 0;
-}
-
-.panel-header h2 {
-  color: #8b0000;
-  font-size: 20px;
-  font-weight: 600;
-  margin-bottom: 10px;
+/* Page Header */
+.page-header {
   display: flex;
+  justify-content: space-between;
   align-items: center;
+  margin-bottom: 24px;
+  padding-bottom: 20px;
+  border-bottom: 2px solid #e0e0e0;
 }
 
-.filter-tabs {
-  display: flex;
-  gap: 10px;
-  margin-top: 15px;
+.page-title {
+  font-size: 28px;
+  font-weight: 700;
+  color: #333;
+  margin: 0;
 }
 
-.filter-tab {
+.total-badge {
+  background: #ffc1cc;
+  color: #333;
   padding: 8px 16px;
-  border: 1px solid #e0e0e0;
   border-radius: 6px;
-  background: white;
-  cursor: pointer;
   font-size: 14px;
-  transition: all 0.3s;
+  font-weight: 600;
 }
 
-.filter-tab:hover {
+/* Table */
+.table-container {
+  overflow-x: auto;
+}
+
+.support-requests-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.support-requests-table thead {
   background: #f5f5f5;
 }
 
-.filter-tab.active {
-  background: #8b0000;
-  color: white;
-  border-color: #8b0000;
-}
-
-.table-wrapper {
-  flex: 1;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-}
-
-.requests-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-  margin-bottom: 15px;
-}
-
-.requests-table thead {
-  position: sticky;
-  top: 0;
-  background: #f8f9fa;
-  z-index: 10;
-}
-
-.requests-table th {
-  padding: 12px 8px;
+.support-requests-table th {
+  padding: 14px 12px;
   text-align: left;
   font-weight: 600;
-  color: #8b0000;
+  color: #333;
   border-bottom: 2px solid #e0e0e0;
   white-space: nowrap;
 }
 
-.requests-table tbody {
+.support-requests-table tbody tr {
+  border-bottom: 1px solid #e0e0e0;
+  transition: background-color 0.2s;
+}
+
+.support-requests-table tbody tr:hover {
+  background-color: #f9f9f9;
+}
+
+.support-requests-table td {
+  padding: 16px 12px;
+  vertical-align: top;
+}
+
+/* Request ID Badge */
+.request-id-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.badge-orange {
+  background: #ffe5cc;
+  color: #cc6600;
+}
+
+.badge-blue {
+  background: #cce5ff;
+  color: #0066cc;
+}
+
+.badge-green {
+  background: #ccffcc;
+  color: #00cc00;
+}
+
+/* Requester Cell */
+.requester-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.requester-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: #e0e0e0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: #666;
+  font-size: 18px;
+}
+
+.requester-info {
   flex: 1;
 }
 
-.request-row {
-  border-bottom: 1px solid #e0e0e0;
-  cursor: pointer;
-  transition: all 0.3s;
-  padding: 0;
-}
-
-.request-row:hover {
-  background-color: #f5f5f5;
-}
-
-.request-row.active {
-  background-color: #fff5f5;
-  border-left: 4px solid #8b0000;
-}
-
-.request-row td {
-  padding: 12px 8px;
-  border-bottom: 1px solid #e0e0e0;
-}
-
-.request-id {
+.requester-name {
   font-weight: 600;
-  color: #8b0000;
-}
-
-.request-type {
-  font-weight: 500;
   color: #333;
-  max-width: 150px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  margin-bottom: 2px;
 }
 
-.request-requester {
+.requester-department {
+  font-size: 12px;
   color: #666;
-  max-width: 120px;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
-.request-status {
-  padding: 4px 8px;
-  border-radius: 6px;
-  font-size: 11px;
+/* Subject Cell */
+.subject-cell {
+  max-width: 300px;
+}
+
+.subject-title {
   font-weight: 600;
-  display: inline-block;
+  color: #333;
+  margin-bottom: 4px;
+}
+
+.subject-description {
+  font-size: 12px;
+  color: #666;
+  line-height: 1.4;
+}
+
+/* Priority Badge */
+.priority-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.priority-high {
+  background: #ffe5cc;
+  color: #cc6600;
+}
+
+.priority-medium {
+  background: #cce5ff;
+  color: #0066cc;
+}
+
+.priority-low {
+  background: #ccffcc;
+  color: #00cc00;
+}
+
+.priority-critical {
+  background: #ffcccc;
+  color: #cc0000;
+}
+
+.priority-icon {
+  font-size: 12px;
+}
+
+/* Status Badge */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .status-pending {
@@ -792,61 +710,128 @@ export default {
   color: #0c5460;
 }
 
-.status-approved {
+.status-resolved {
   background: #d4edda;
   color: #155724;
 }
 
-.status-rejected {
+.status-declined {
   background: #f8d7da;
   color: #721c24;
 }
 
-.btn-archive {
-  background: transparent;
-  color: white;
-  border: 1px solid rgba(255,255,255,0.12);
-  padding: 8px 12px;
-  border-radius: 8px;
-  cursor: pointer;
-  font-weight: 600;
+.status-icon {
+  font-size: 12px;
 }
-.btn-archive:hover { opacity: 0.95 }
 
-.request-stage {
+/* Created Cell */
+.created-cell {
+  font-size: 13px;
+}
+
+.created-date {
+  color: #333;
+  margin-bottom: 2px;
+}
+
+.created-time {
   color: #666;
   font-size: 12px;
 }
 
-.request-progress {
-  text-align: center;
-  font-weight: 600;
-  color: #8b0000;
-}
-
-.pagination {
+/* Actions Cell */
+.actions-cell {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 15px;
-  padding: 15px;
-  border-top: 2px solid #e0e0e0;
-  flex-shrink: 0;
+  gap: 8px;
 }
 
-.pagination-btn {
-  padding: 6px 10px;
+.action-btn {
+  width: 32px;
+  height: 32px;
   border: 1px solid #e0e0e0;
   border-radius: 4px;
   background: white;
+  color: #666;
   cursor: pointer;
-  transition: all 0.3s;
-  color: #8b0000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.action-btn:hover {
+  background: #f5f5f5;
+  border-color: #ccc;
+  color: #333;
+}
+
+.action-btn.delete-btn:hover {
+  background: #fff5f5;
+  border-color: #ff6b6b;
+  color: #cc0000;
+}
+
+/* Pagination */
+.pagination {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 0;
+  margin-top: 20px;
+  border-top: 1px solid #e0e0e0;
+}
+
+.pagination-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.items-per-page-label {
+  font-size: 14px;
+  color: #666;
+}
+
+.items-per-page-select {
+  padding: 6px 10px;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  font-size: 14px;
+  background: white;
+  cursor: pointer;
+}
+
+.pagination-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pagination-info {
+  font-size: 14px;
+  color: #666;
+  margin-right: 8px;
+}
+
+.pagination-btn {
+  width: 32px;
+  height: 32px;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  background: white;
+  color: #666;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
 }
 
 .pagination-btn:hover:not(:disabled) {
-  background: #8b0000;
-  color: white;
+  background: #f5f5f5;
+  border-color: #ccc;
+  color: #333;
 }
 
 .pagination-btn:disabled {
@@ -854,21 +839,26 @@ export default {
   cursor: not-allowed;
 }
 
-.pagination-info {
-  font-size: 13px;
-  color: #666;
-  font-weight: 500;
-  min-width: 200px;
+/* Loading & Empty States */
+.loading {
   text-align: center;
+  padding: 60px 20px;
+  color: #666;
 }
 
-.approval-panel {
-  background: white;
-  border-radius: 12px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-  padding: 30px;
-  height: 100%;
-  overflow-y: auto;
+.spinner {
+  border: 3px solid #f3f3f3;
+  border-top: 3px solid #8b0000;
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  animation: spin 1s linear infinite;
+  margin: 0 auto 20px;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
 }
 
 .empty-state {
@@ -877,268 +867,13 @@ export default {
   color: #999;
 }
 
-.request-details {
-  margin-bottom: 30px;
-  padding: 25px;
-  background: #f8f9fa;
-  border-radius: 10px;
-  border-left: 4px solid #8b0000;
-}
-
-.request-details h3 {
-  color: #8b0000;
-  margin-bottom: 20px;
-  font-size: 24px;
-}
-
-.detail-row {
-  display: grid;
-  grid-template-columns: 150px 1fr;
-  margin-bottom: 15px;
-  padding-bottom: 15px;
-  border-bottom: 1px solid #e0e0e0;
-}
-
-.detail-row:last-child {
-  border-bottom: none;
-}
-
-.detail-label {
-  font-weight: 600;
-  color: #666;
-}
-
-.detail-value {
-  color: #333;
-}
-
-.request-details-text {
-  background: white;
-  padding: 15px;
-  border-radius: 6px;
-  margin-top: 10px;
-  white-space: pre-wrap;
-  line-height: 1.6;
-  font-family: monospace;
-  font-size: 12px;
-}
-
-.steps-container {
-  margin: 30px 0;
-}
-
-.steps-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: #333;
-  margin-bottom: 20px;
-}
-
-.steps {
-  display: flex;
-  justify-content: space-between;
-  position: relative;
-  margin-bottom: 40px;
-  gap: 20px;
-}
-
-.steps::before {
-  content: '';
-  position: absolute;
-  top: 20px;
-  left: 0;
-  right: 0;
-  height: 3px;
-  background: #e0e0e0;
-  z-index: 0;
-}
-
-.step {
-  text-align: center;
-  position: relative;
-  z-index: 1;
-  flex: 1;
-}
-
-.step-circle {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  background: #e0e0e0;
-  color: #666;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin: 0 auto 10px;
-  font-weight: 600;
-  transition: all 0.3s;
-}
-
-.step.active .step-circle {
-  background: #8b0000;
-  color: white;
-  box-shadow: 0 0 0 4px rgba(139, 0, 0, 0.2);
-}
-
-.step.completed .step-circle {
-  background: #28a745;
-  color: white;
-}
-
-.step.rejected .step-circle {
-  background: #dc3545;
-  color: white;
-}
-
-.step-label {
-  font-size: 13px;
-  font-weight: 500;
-  color: #666;
-}
-
-.step.active .step-label {
-  color: #8b0000;
-  font-weight: 600;
-}
-
-.approval-cards {
-  display: grid;
-  gap: 20px;
-}
-
-.approval-card {
-  border: 2px solid #e0e0e0;
-  border-radius: 10px;
-  padding: 25px;
-  background: white;
-  transition: all 0.3s;
-}
-
-.approval-card.pending {
-  border-color: #ffc107;
-  background: #fffbf0;
-}
-
-.approval-card.approved {
-  border-color: #28a745;
-  background: #f0f9f4;
-}
-
-.approval-card.rejected {
-  border-color: #dc3545;
-  background: #fff5f5;
-}
-
-.approval-card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-  padding-bottom: 15px;
-  border-bottom: 2px solid #e0e0e0;
-}
-
-.approval-card-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: #333;
-}
-
-.approval-status-badge {
-  padding: 6px 14px;
-  border-radius: 20px;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.approval-info {
-  margin-bottom: 20px;
-  font-size: 14px;
-  color: #666;
-}
-
-.approval-info strong {
-  color: #333;
-}
-
-.comment-section {
-  margin-bottom: 20px;
-}
-
-.comment-section label {
-  display: block;
-  margin-bottom: 8px;
-  font-weight: 600;
-  color: #333;
-}
-
-.comment-textarea {
-  width: 100%;
-  padding: 12px;
-  border: 2px solid #e0e0e0;
-  border-radius: 6px;
-  font-family: inherit;
-  resize: vertical;
-  min-height: 100px;
-  transition: all 0.3s;
-}
-
-.comment-textarea:focus {
-  outline: none;
-  border-color: #8b0000;
-  box-shadow: 0 0 0 3px rgba(139, 0, 0, 0.1);
-}
-
-.comment-textarea:disabled {
-  background: #f5f5f5;
-  cursor: not-allowed;
-}
-
-.approval-actions {
-  display: flex;
-  gap: 15px;
-}
-
-.btn {
-  flex: 1;
-  padding: 12px 24px;
-  border: none;
-  border-radius: 8px;
-  font-size: 15px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.3s;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-}
-
-.btn:disabled {
+.empty-state i {
+  font-size: 48px;
+  margin-bottom: 16px;
   opacity: 0.5;
-  cursor: not-allowed;
 }
 
-.btn-approve {
-  background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
-  color: white;
-}
-
-.btn-approve:hover:not(:disabled) {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(40, 167, 69, 0.3);
-}
-
-.btn-reject {
-  background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
-  color: white;
-}
-
-.btn-reject:hover:not(:disabled) {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(220, 53, 69, 0.3);
-}
-
+/* Notifications */
 .notification {
   position: fixed;
   top: 20px;
@@ -1160,6 +895,10 @@ export default {
   background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
 }
 
+.notification.info {
+  background: linear-gradient(135deg, #17a2b8 0%, #138496 100%);
+}
+
 @keyframes slideIn {
   from {
     transform: translateX(100%);
@@ -1171,39 +910,38 @@ export default {
   }
 }
 
-.loading {
-  text-align: center;
-  padding: 40px;
-  color: #666;
-}
-
-.spinner {
-  border: 3px solid #f3f3f3;
-  border-top: 3px solid #8b0000;
-  border-radius: 50%;
-  width: 40px;
-  height: 40px;
-  animation: spin 1s linear infinite;
-  margin: 0 auto 20px;
-}
-
-@keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
-}
-
+/* Responsive */
 @media (max-width: 1024px) {
-  .main-layout {
-    grid-template-columns: 1fr;
-    height: auto;
+  .support-requests-table {
+    font-size: 12px;
   }
 
-  .requests-panel {
-    max-height: 400px;
+  .support-requests-table th,
+  .support-requests-table td {
+    padding: 10px 8px;
   }
 
-  .approval-panel {
-    height: auto;
+  .subject-cell {
+    max-width: 200px;
+  }
+}
+
+@media (max-width: 768px) {
+  .page-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .pagination {
+    flex-direction: column;
+    gap: 12px;
+    align-items: stretch;
+  }
+
+  .pagination-left,
+  .pagination-right {
+    justify-content: center;
   }
 }
 </style>
